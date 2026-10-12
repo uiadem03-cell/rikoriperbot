@@ -267,3 +267,332 @@ async def _apply_referral(update, context, user, arg):
         )
     except Exception:
         pass
+# ==============================
+#           الأزرار
+# ==============================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    user_id = q.from_user.id
+    register(q.from_user)
+
+    # ---------- الرئيسية ----------
+    if q.data == "home":
+        context.user_data.pop("waiting_text", None)
+        u = get_user(user_id)
+        await q.edit_message_text(
+            welcome_text(q.from_user, u["points"]),
+            reply_markup=main_keyboard(),
+            parse_mode="HTML"
+        )
+
+    # ---------- التصليح ----------
+    elif q.data == "repair":
+        context.user_data["waiting_text"] = True
+        await q.edit_message_text(
+            "🛠️ <b>تصليح الثغرات</b>\n"
+            "━━━━━━━━━━━━━━━\n"
+            "أرسل أي نص، والبوت يولّد لك القائمة تلقائياً.\n\n"
+            f"💰 التكلفة: <b>{POINTS_COST}</b> نقاط",
+            reply_markup=back_keyboard(),
+            parse_mode="HTML"
+        )
+
+    # ---------- صنع ثغرة ----------
+    elif q.data == "guess":
+        with db() as con:
+            u = con.execute(
+                "SELECT points FROM users WHERE user_id=?", (user_id,)
+            ).fetchone()
+
+            if user_id != OWNER_ID and u["points"] < GUESS_COST:
+                await q.edit_message_text(
+                    "❌ <b>رصيدك غير كافٍ</b>\n\n"
+                    f"تحتاج <b>{GUESS_COST}</b> نقاط، لديك <b>{u['points']}</b>.\n\n"
+                    "🎁 اجمع نقاطاً عبر دعوة أصدقائك من زر الإحالات.",
+                    reply_markup=back_keyboard(),
+                    parse_mode="HTML"
+                )
+                return
+
+            if user_id != OWNER_ID:
+                con.execute(
+                    "UPDATE users SET points=points-? WHERE user_id=?",
+                    (GUESS_COST, user_id)
+                )
+
+        result = format_output()
+        output = "\n".join(result)
+
+        await q.edit_message_text(
+            "🔮 <b>صنع ثغرة</b>\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"<code>{output}</code>\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"<b>{SCAM_FOOTER}</b>\n"
+            f"👨‍💻 <b>@{OWNER_USERNAME}</b>\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"💰 خُصم <b>{GUESS_COST}</b> نقطة",
+            reply_markup=guess_again_keyboard(),
+            parse_mode="HTML"
+        )
+
+    # ---------- حسابي ----------
+    elif q.data == "account":
+        u = get_user(user_id)
+        await q.edit_message_text(
+            "👤 <b>حسابي</b>\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+            f"🔹 <b>اليوزر:</b> @{u['username'] or 'غير محدد'}\n"
+            f"💰 <b>النقاط:</b> {u['points']:,}\n"
+            f"🛠️ <b>مرات التصليح:</b> {u['repairs']}\n"
+            f"🎁 <b>الإحالات:</b> {u['referrals']}",
+            reply_markup=back_keyboard(),
+            parse_mode="HTML"
+        )
+
+    # ---------- الإحالات ----------
+    elif q.data == "referrals":
+        link = f"https://t.me/{context.bot.username}?start=ref_{user_id}"
+        u = get_user(user_id)
+        referred = get_referred_users(user_id)
+
+        if referred:
+            lines = []
+            for i, r in enumerate(referred, 1):
+                name = f"@{r['username']}" if r["username"] else f"ID: {r['user_id']}"
+                lines.append(f"{i}. {name}")
+            referred_list = "\n".join(lines)
+        else:
+            referred_list = "لا يوجد أحد بعد."
+
+        await q.edit_message_text(
+            "🎁 <b>نظام الإحالات</b>\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"كل دعوة ناجحة = <b>{REFERRAL_REWARD}</b> نقطة\n\n"
+            f"👥 <b>عدد دعواتك:</b> {u['referrals']}\n\n"
+            "📋 <b>الأشخاص الذين دخلوا عبر رابطك:</b>\n"
+            f"{referred_list}\n\n"
+            "🔗 <b>رابطك الخاص:</b>\n"
+            f"<code>{link}</code>",
+            reply_markup=back_keyboard(),
+            parse_mode="HTML"
+        )
+
+    # ---------- الإحصائيات ----------
+    elif q.data == "status":
+        with db() as con:
+            users = con.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
+            repairs = con.execute("SELECT SUM(repairs) n FROM users").fetchone()["n"] or 0
+            refs = con.execute("SELECT COUNT(*) n FROM referrals").fetchone()["n"]
+
+        await q.edit_message_text(
+            "📊 <b>إحصائيات البوت</b>\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"👥 <b>المستخدمون:</b> {users:,}\n"
+            f"🛠️ <b>عمليات التصليح:</b> {repairs:,}\n"
+            f"🎁 <b>الإحالات:</b> {refs:,}\n"
+            "━━━━━━━━━━━━━━━\n"
+            "🟢 <b>الحالة:</b> يعمل",
+            reply_markup=back_keyboard(),
+            parse_mode="HTML"
+        )
+
+
+# ==============================
+#         استقبال النص
+# ==============================
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    msg = update.effective_message
+    register(user)
+
+    if not context.user_data.get("waiting_text"):
+        u = get_user(user.id)
+        await msg.reply_text(
+            welcome_text(user, u["points"]),
+            reply_markup=main_keyboard(),
+            parse_mode="HTML"
+        )
+        return
+
+    context.user_data["waiting_text"] = False
+
+    with db() as con:
+        u = con.execute(
+            "SELECT points FROM users WHERE user_id=?", (user.id,)
+        ).fetchone()
+
+        if user.id != OWNER_ID and u["points"] < POINTS_COST:
+            await msg.reply_text(
+                "❌ <b>رصيدك غير كافٍ</b>\n\n"
+                f"تحتاج <b>{POINTS_COST}</b> نقاط، لديك <b>{u['points']}</b>.\n\n"
+                "🎁 اجمع نقاطاً عبر دعوة أصدقائك من زر الإحالات.",
+                reply_markup=main_keyboard(),
+                parse_mode="HTML"
+            )
+            return
+
+        if user.id != OWNER_ID:
+            con.execute(
+                "UPDATE users SET points=points-? WHERE user_id=?",
+                (POINTS_COST, user.id)
+            )
+        con.execute(
+            "UPDATE users SET repairs=repairs+1 WHERE user_id=?",
+            (user.id,)
+        )
+
+    result = format_output()
+    output = "\n".join(result)
+
+    await msg.reply_text(
+        "✅ <b>تم التصليح بنجاح</b>\n"
+        "━━━━━━━━━━━━━━━\n"
+        f"<code>{output}</code>\n"
+        "━━━━━━━━━━━━━━━\n"
+        f"<b>{SCAM_FOOTER}</b>\n"
+        f"👨‍💻 <b>@{OWNER_USERNAME}</b>",
+        reply_markup=main_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+# ==============================
+#          أوامر المالك
+# ==============================
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.effective_message.reply_text("هذا الأمر للمالك فقط.")
+        return
+
+    await update.effective_message.reply_text(
+        "👑 <b>لوحة المالك</b>\n"
+        "━━━━━━━━━━━━━━━\n"
+        "/stats — الإحصائيات\n"
+        "/points ID AMOUNT — إضافة/خصم نقاط\n"
+        "/broadcast TEXT — رسالة جماعية",
+        parse_mode="HTML"
+    )
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    with db() as con:
+        users = con.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
+        points = con.execute("SELECT SUM(points) n FROM users").fetchone()["n"] or 0
+        repairs = con.execute("SELECT SUM(repairs) n FROM users").fetchone()["n"] or 0
+
+    await update.effective_message.reply_text(
+        "📊 <b>إحصائيات كاملة</b>\n"
+        "━━━━━━━━━━━━━━━\n"
+        f"👥 المستخدمون: <b>{users:,}</b>\n"
+        f"💰 إجمالي النقاط: <b>{points:,}</b>\n"
+        f"🛠️ عمليات التصليح: <b>{repairs:,}</b>",
+        parse_mode="HTML"
+    )
+
+
+async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    if len(context.args) != 2:
+        await update.effective_message.reply_text(
+            "الاستخدام: <code>/points USER_ID AMOUNT</code>",
+            parse_mode="HTML"
+        )
+        return
+    try:
+        target, amount = map(int, context.args)
+    except ValueError:
+        await update.effective_message.reply_text("اكتب أرقاماً صحيحة.")
+        return
+
+    with db() as con:
+        cur = con.execute(
+            "UPDATE users SET points=MAX(0, points+?) WHERE user_id=? AND user_id!=?",
+            (amount, target, OWNER_ID)
+        )
+        if cur.rowcount == 0:
+            await update.effective_message.reply_text(
+                "المستخدم غير موجود أو لا يمكن تعديل رصيد المالك."
+            )
+            return
+        balance = con.execute(
+            "SELECT points FROM users WHERE user_id=?", (target,)
+        ).fetchone()["points"]
+
+    await update.effective_message.reply_text(
+        f"✅ تم التحديث.\n💰 الرصيد الحالي: <b>{balance:,}</b>",
+        parse_mode="HTML"
+    )
+
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "الاستخدام: <code>/broadcast النص</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    text = " ".join(context.args)
+    with db() as con:
+        users = con.execute("SELECT user_id FROM users").fetchall()
+
+    sent, failed = 0, 0
+    for row in users:
+        try:
+            await context.bot.send_message(chat_id=row["user_id"], text=text)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await update.effective_message.reply_text(
+        f"✅ تم الإرسال.\n\n✔️ نجح: {sent}\n❌ فشل: {failed}"
+    )
+
+
+# ==============================
+#          خطأ عام
+# ==============================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    print(f"⚠️ خطأ: {context.error}")
+
+
+# ==============================
+#           التشغيل
+# ==============================
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("ضع توكن البوت في متغير البيئة BOT_TOKEN أولاً.")
+
+    init_db()
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("points", points))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CallbackQueryHandler(
+        buttons,
+        pattern="^(home|repair|guess|account|referrals|status)$"
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        text_handler
+    ))
+    app.add_error_handler(error_handler)
+
+    print("🛡️ RIKO SECURITY is running...")
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
